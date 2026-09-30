@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ZooBC Signer — test dapp</title>
+<style>
+  :root { --ink:#0c1511; --card:#14211c; --line:#1f3129; --teal:#119e8c; --amber:#f5c77e; --red:#d64545; --text:#e6efe9; --muted:#8fa39a; }
+  body { margin:0; background:var(--ink); color:var(--text); font:14px/1.45 -apple-system,Segoe UI,Inter,Roboto,sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:24px; display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+  h1 { grid-column: 1/-1; margin:0 0 4px; font-size:22px; } h1 small { color:var(--muted); font-weight:400; font-size:13px; margin-left:10px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  section h2 { margin:0 0 8px; font-size:14px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  button { font:inherit; background:#182a24; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 10px; cursor:pointer; margin:2px; }
+  button.primary { background:var(--teal); border-color:var(--teal); color:#fff; font-weight:600; }
+  button.warn { border-color:var(--amber); color:var(--amber); }
+  input, select, textarea { font:inherit; background:#101a16; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 8px; width:100%; box-sizing:border-box; }
+  label { display:block; font-size:12px; color:var(--muted); margin-top:8px; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px; word-break:break-all; }
+  #log { grid-column:1/-1; max-height:420px; overflow:auto; font-family:ui-monospace,Menlo,monospace; font-size:12px; white-space:pre-wrap; }
+  .ok { color:#35c99a } .err { color:#ff9a9a } .muted { color:var(--muted) }
+  .grid { display:flex; flex-wrap:wrap; gap:2px; }
+  .status { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ZooBC Signer test dapp <small>exercises every provider method and every §6 transaction type</small></h1>
+
+  <section>
+    <h2>Provider</h2>
+    <div class="status" id="detect">Detecting window.zoobc…</div>
+    <div style="margin-top:8px">
+      <button class="primary" id="connect">zbc_requestAccounts</button>
+      <button id="accounts">zbc_accounts</button>
+      <button id="rule">zbc_getSigningRule</button>
+      <button id="disconnect">zbc_disconnect</button>
+      <button id="hasAccount">zbc_hasAccount</button>
+    </div>
+    <label>Signing account (shared)</label>
+    <select id="account"></select>
+    <label>Recipient / counterparty (any format)</label>
+    <input id="recipient" value="ZBC_2BFLEMTU_FO2KWOQT_NC6UMFPE_43ICESVX_DIAWXL4F_ECRTFSLX_Q43UIV2I">
+    <label>Chain: genesis hex (auto-filled by zbc_getSigningRule) · tag · id · node</label>
+    <input id="genesis" class="mono" placeholder="64 hex">
+    <div style="display:flex;gap:6px;margin-top:6px"><input id="tag" value="ZBC-TX"><input id="chainId" value="testnet"><input id="node" placeholder="https://… (optional)"></div>
+    <label>Fee (ZBC) · survival (ZBC)</label>
+    <div style="display:flex;gap:6px"><input id="fee" value="0.0255"><input id="survival" value="0"></div>
+    <label>Verify the returned signature locally (needs the account's public data only)</label>
+    <input type="checkbox" id="verify" checked style="width:auto"> verify
+  </section>
+
+  <section>
+    <h2>Other methods</h2>
+    <label>Message</label><input id="msg" value="Log in to test dapp #42">
+    <button id="signMessage">zbc_signMessage</button>
+    <button id="signMessageBad" class="warn">message = 32-byte hex (must be refused)</button>
+    <hr style="border-color:var(--line)">
+    <label>Digest kinds (preimage is built here, digest recomputed by the signer)</label>
+    <div class="grid">
+      <button data-digest="group-link">group-link</button>
+      <button data-digest="group-control">group-control</button>
+      <button data-digest="relay-permit">relay-permit</button>
+      <button data-digest="fee-vote-reveal">fee-vote-reveal</button>
+      <button data-digest="escrow-cosign">escrow-cosign</button>
+      <button data-digest="blind" class="warn">bare digest (4300 unless blind signing on)</button>
+      <button data-digest="wrong" class="warn">wrong digest (4300)</button>
+    </div>
+    <hr style="border-color:var(--line)">
+    <label>Multisig held in the signer: paste its ZBC_ address (from the popup) — zbc_signMultisig, then the type-5 outer</label>
+    <input id="msaddr" placeholder="ZBC_…">
+    <button id="signMultisig">zbc_signMultisig (send 1 ZBC)</button>
+    <button id="msFallback">fallback: per-participant zbc_signTransaction with context.multisig</button>
+    <hr style="border-color:var(--line)">
+    <button id="submit" class="warn">zbc_submitTransaction (send 0.001 ZBC to recipient — broadcasts!)</button>
+  </section>
+
+  <section style="grid-column:1/-1">
+    <h2>Every §6 transaction type → zbc_signTransaction (intent matches the bytes)</h2>
+    <div class="grid" id="types"></div>
+    <div style="margin-top:8px">
+      <button id="mismatch" class="warn">Intent mismatch: page says 1 ZBC, bytes say 100 ZBC</button>
+      <button id="wrongSender" class="warn">Sender ≠ requested account (4300)</button>
+      <button id="truncated" class="warn">Truncated bytes (4300)</button>
+      <button id="notHeld" class="warn">Account not held (4404)</button>
+      <button id="wrongChain" class="warn">Wrong genesis (4901)</button>
+      <button id="unknownType" class="warn">Unknown type 999 (hold to sign)</button>
+      <button id="allTypes">Run all types in sequence</button>
+    </div>
+  </section>
+
+  <section id="log"></section>
+</main>
+<script src="dapp.js"></script>
+<script>
+(() => {
+  const Z = window.ZBCDapp;
+  const $ = (id) => document.getElementById(id);
+  const logEl = $('log');
+  const log = (msg, cls = '') => { const d = document.createElement('div'); d.className = cls; d.textContent = `${new Date().toLocaleTimeString()} ${msg}`; logEl.prepend(d); };
+  const j = (o) => JSON.stringify(o, (k, v) => typeof v === 'bigint' ? v.toString() : v);
+  let accounts = [];
+  const provider = () => window.zoobc;
+  const detect = () => { $('detect').textContent = provider() && provider().isZooBCSigner ? `window.zoobc found · version ${provider().version}` : 'window.zoobc not found — is the extension installed?'; };
+  detect(); window.addEventListener('zoobc#initialized', detect);
+  if (provider()) { provider().on('accountsChanged', (a) => { log('event accountsChanged ' + j(a)); accounts = a; fillAccounts(); }); provider().on('lock', () => log('event lock')); provider().on('chainChanged', (c) => log('event chainChanged ' + j(c))); }
+
+  const req = async (method, params) => { log(`→ ${method} ${j(params || {}).slice(0, 400)}`, 'muted'); try { const r = await provider().request({ method, params }); log(`← ${method} ${j(r).slice(0, 1200)}`, 'ok'); return r; } catch (e) { log(`✗ ${method} ${e.code}: ${e.message}`, 'err'); throw e; } };
+  const fillAccounts = () => { const s = $('account'); s.innerHTML = ''; for (const a of accounts) { const o = document.createElement('option'); o.value = a.typed; o.textContent = `${a.label} · ${a.format}${a.btc ? '/' + a.btc : ''} · ${a.address}${a.multisig ? ` · multisig ${a.multisig.min}/${a.multisig.participants.length}` : ''}`; s.append(o); } };
+  const current = () => accounts.find((a) => a.typed === $('account').value) || accounts[0];
+  const chain = () => ({ genesis: $('genesis').value.trim(), tag: $('tag').value.trim() || 'ZBC-TX', id: $('chainId').value.trim() || undefined, node: $('node').value.trim() || undefined });
+  const atomic = (v) => BigInt(Math.round(parseFloat(v || '0') * 1e8));
+  const env = (extra = {}) => ({ sender: current().typed, recipient: $('recipient').value.trim(), fee: atomic($('fee').value), survival: atomic($('survival').value), timestamp: Math.floor(Date.now() / 1000), ...extra });
+  const genesisBytes = () => Z.hexToBytes($('genesis').value.trim());
+
+  $('connect').onclick = async () => { accounts = await req('zbc_requestAccounts', { chain: $('chainId').value }); fillAccounts(); };
+  $('accounts').onclick = async () => { accounts = await req('zbc_accounts'); fillAccounts(); };
+  $('rule').onclick = async () => { const r = await req('zbc_getSigningRule', $('node').value ? { node: $('node').value } : undefined); $('genesis').value = r.genesis; $('tag').value = r.tag; $('chainId').value = r.chain; };
+  $('disconnect').onclick = () => req('zbc_disconnect');
+  $('hasAccount').onclick = () => req('zbc_hasAccount', { account: current() ? current().address : $('recipient').value });
+
+  async function signTx(unsigned, intent, context, account = current().typed) {
+    const hex = Z.bytesToHex(unsigned);
+    const r = await req('zbc_signTransaction', { account, unsignedTx: hex, chain: chain(), intent, context });
+    if ($('verify').checked && r && r.signature) {
+      const acc = accounts.find((a) => a.typed === account);
+      const d = Z.txDigest(unsigned, genesisBytes(), $('tag').value);
+      const p = Z.parseTypedHex(account);
+      const okv = acc && Z.verifyDigest(acc.format, acc.btc, p.payload, d, Z.hexToBytes(r.signature));
+      log(`local verify: ${okv ? 'signature verifies' : 'DOES NOT VERIFY'} · hash ${Z.bytesToHex(Z.txHash(unsigned, Z.hexToBytes(r.signature)))} ${r.txHash === Z.bytesToHex(Z.txHash(unsigned, Z.hexToBytes(r.signature))) ? '(matches)' : '(MISMATCH)'}`, okv ? 'ok' : 'err');
+    }
+    return r;
+  }
+  const H = '11'.repeat(32);
+  const R = () => $('recipient').value.trim();
+  const TYPES = [
+    [0, 'Message only', () => [{}, { message: 'hello from the dapp' }], { title: 'Send a message', typeName: 'Message' }],
+    [1, 'Send 25 ZBC', () => [{ amount: 2500000000n }], { title: 'Pay order #4471', typeName: 'SendZBC', rows: [['Amount', '25 ZBC'], ['To', R()]] }],
+    [1, 'Send 120 ZBC in escrow', () => [{ amount: 12000000000n }, { escrow: { approver: R(), commission: 120000000n, timeout: Math.floor(Date.now() / 1000) + 86400, instruction: 'Release when the logo files are delivered in SVG and PNG.' } }], { title: 'Escrow payment', typeName: 'SendZBC', rows: [['Amount', '120 ZBC']] }],
+    [6, 'Stream 5000 ZBC / 30 days', () => [{ amount: 500000000000n, minutes: 43200 }], { title: 'Stream', typeName: 'LiquidPayment', rows: [['Amount', '5000 ZBC']] }],
+    [262, 'Stop liquid payment', () => [{ txId: -1234567890123456789n }, { recipient: null }], { typeName: 'LiquidPaymentStop' }],
+    [15, 'Create trigger', () => [{ fireHeight: 812440, amount: 100000000n, eventId: 'match-1' }], { typeName: 'CreateTrigger', rows: [['Amount', '1 ZBC']] }],
+    [16, 'Cancel trigger', () => [{ triggerId: 77n }, { recipient: null }], { typeName: 'CancelTrigger' }],
+    [29, 'Schedule 3 × 1 ZBC', () => [{ perTranche: 100000000n, intervalS: 86400, fires: 3, cancelPolicy: 1 }], { typeName: 'ScheduledTransfer' }],
+    [30, 'Cancel schedule', () => [{ scheduleId: 11n }, { recipient: null }], { typeName: 'CancelSchedule' }],
+    [31, 'Redirect schedule', () => [{ scheduleId: 11n, newRecipient: R() }, { recipient: null }], { typeName: 'ReassignSchedule' }],
+    [10, 'Issue token GOLD', () => [{ decimals: 2, flags: 3, supply: 10000000n, backing: 100000000n, symbol: 'GOLD', name: 'Gold token', survival: 0n }, { recipient: null, message: '{"d":"A test token"}' }], { typeName: 'IssueToken' }],
+    [11, 'Transfer token #123456789', () => [{ tokenId: 123456789n, amount: 500n }], { typeName: 'TransferToken', rows: [['Amount', '500']] }],
+    [12, 'Mint token', () => [{ tokenId: 123456789n, amount: 1000n }, { recipient: null }], { typeName: 'MintToken' }],
+    [13, 'Burn token', () => [{ tokenId: 123456789n, amount: 1000n }, { recipient: null }], { typeName: 'BurnToken' }],
+    [14, 'Extend token life', () => [{ tokenId: 123456789n, amount: 300000000n }, { recipient: null }], { typeName: 'FinanceToken' }],
+    [18, 'Create swap offer', () => [{ giveAmount: 100000000n, wantToken: 123456789n, wantAmount: 5000n }, { recipient: null }], { typeName: 'CreateSwapOffer' }],
+    [19, 'Accept swap offer #42', () => [{ offerId: 42n }, { recipient: null }], { typeName: 'AcceptSwapOffer' }],
+    [20, 'Cancel swap offer #42', () => [{ offerId: 42n }, { recipient: null }], { typeName: 'CancelSwapOffer' }],
+    [21, 'Create market', () => [{ baseToken: 123456789n, deposit: 100000000n }, { recipient: null }], { typeName: 'CreateMarket' }],
+    [22, 'Place order', () => [{ marketId: 7n, side: 0, price: 150000000n, amount: 1000n }, { recipient: null }], { typeName: 'PlaceOrder' }],
+    [23, 'Cancel order', () => [{ orderId: 99n }, { recipient: null }], { typeName: 'CancelOrder' }],
+    [3, 'Save dataset (poe:)', () => [{ property: 'poe:contract.pdf', value: '{"sha256":"' + H + '"}', setter: current().typed, about: current().typed }, { recipient: current().typed }], { typeName: 'SetupAccountDataset' }],
+    [259, 'Remove dataset', () => [{ property: 'role', value: 'tester', setter: current().typed, about: R() }], { typeName: 'RemoveAccountDataset' }],
+    [8, 'Create file', () => [{ path: '/docs/hello.txt', content: 'hello zoobc\n' }, { recipient: null }], { typeName: 'DFSCreateFile' }],
+    [264, 'Update file', () => [{ path: '/docs/hello.txt', content: 'hello again\n' }, { recipient: null }], { typeName: 'DFSUpdateFile' }],
+    [520, 'Delete file', () => [{ path: '/docs/hello.txt' }, { recipient: null }], { typeName: 'DFSDeleteFile' }],
+    [9, 'Prepaid storage', () => [{ amount: 100000000n }, { recipient: null }], { typeName: 'AddPrepaidStorage' }],
+    [40, 'Store file', () => [{ fileRoot: H, totalSize: 4096, pieceSize: 2048, deposit: 100000000n, pieces: [H, '22'.repeat(32)] }, { recipient: null }], { typeName: 'StoreFile' }],
+    [296, 'Add to stored file', () => [{ fileRoot: H, amount: 1000000n }, { recipient: null }], { typeName: 'FundStoredFile' }],
+    [52, 'Fund longevity', () => [{ targetTxId: -1234567890123456789n, amount: 10000000n, targetHeight: 900000, targetBytes: 500n }, { recipient: null }], { typeName: 'FundLongevity' }],
+    [309, 'Close paid life', () => [{ targetId: -1234567890123456789n }, { recipient: null }], { typeName: 'CloseLongevity' }],
+    [53, 'Retired type 53 (Sign disabled)', () => [{ targetTxId: -1n }, { recipient: null }], { typeName: 'CancelLongevity' }],
+    [42, 'Transfer dataset object', () => [{ objectId: H, newOwner: R() }, { recipient: null }], { typeName: 'TransferDataset' }],
+    [43, 'Set dataset policy', () => [{ objectId: H, mode: 1, add: [R()], remove: [] }, { recipient: null }], { typeName: 'SetDatasetPolicy' }],
+    [44, 'Accept dataset object', () => [{ objectId: H }, { recipient: null }], { typeName: 'AcceptDataset' }],
+    [45, 'Delete dataset object', () => [{ objectId: H }, { recipient: null }], { typeName: 'DeleteDataset' }],
+    [4, 'Approve escrow', () => [{ decision: 0, escrowTxHash: H }, { recipient: null }], { title: 'Escrow decision', typeName: 'ApprovalEscrow' }, { escrow: { payer: 'ZBC_B8NL…', recipient: 'Maya', amount: 12000000000, commission: 120000000, instruction: 'Release when the logo files are delivered in SVG and PNG.', status: 'pending' } }],
+    [4, 'Reject escrow', () => [{ decision: 1, escrowTxHash: H }, { recipient: null }], { title: 'Escrow decision', typeName: 'ApprovalEscrow' }],
+    [260, 'Escrow request', () => [{ payer: R(), amount: 250000000n, approver: current().typed, commission: 1000n, timeout: Math.floor(Date.now() / 1000) + 86400, instruction: 'pay on delivery' }], { typeName: 'EscrowRequest' }],
+    [516, 'Decline request', () => [{ id: 5n, reason: 'not now' }], { typeName: 'DeclineRequest' }],
+    [516, 'Refuse escrow', () => [{ id: 5n, reason: 'wrong files', isEscrow: true }], { typeName: 'DeclineEscrow' }],
+    [5, 'Multisig: create 2-of-3', () => [{ info: { min: 2, nonce: 0n, participants: [current().typed, R(), '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'] } }, { recipient: null }], { typeName: 'MultiSignature' }],
+    [5, 'Multisig: propose (info + inner)', () => { const parts = [current().typed, R(), '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045']; const ms = Z.multisigAddressTyped(2, 0n, parts); const inner = Z.buildEnvelope({ type: 1, version: 1, sender: ms, recipient: R(), fee: 10000000n, body: Z.bodies[1]({ amount: 150000000000n }), message: 'Q4 design retainer' }); return [{ info: { min: 2, nonce: 0n, participants: parts }, inner }, { recipient: null }]; }, { typeName: 'MultiSignature' }],
+    [5, 'Multisig: co-sign (needs context.multisigInner)', () => { const parts = [current().typed, R(), '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045']; const ms = Z.multisigAddressTyped(2, 0n, parts); const inner = Z.buildEnvelope({ type: 1, version: 1, sender: ms, recipient: R(), fee: 10000000n, body: Z.bodies[1]({ amount: 150000000000n }) }); window.__inner = Z.bytesToHex(inner); return [{ sigs: { hash: Z.bytesToHex(Z.sha3_256(inner)), list: [] } }, { recipient: null }]; }, { typeName: 'MultiSignature' }, () => ({ multisigInner: window.__inner })],
+    [55, 'Group link', () => [{ member: R(), validUntil: 812440, seq: 0, proofKind: 0, sig: 'ab'.repeat(64) }, { recipient: null }], { typeName: 'GroupLink' }],
+    [56, 'Group remove', () => [{ member: R() }, { recipient: null }], { typeName: 'GroupRemove' }],
+    [57, 'Group permissions (unlimited!)', () => [{ member: R(), flags: 3, limit: 0n }, { recipient: null }], { typeName: 'GroupPermissions' }],
+    [58, 'Group handover', () => [{ member: R(), validUntil: 812440, seq: 1, proofKind: 0, sig: 'ab'.repeat(64) }, { recipient: null }], { typeName: 'GroupHandover' }],
+    [2, 'Register node', () => [{ nodePub: '22'.repeat(32), owner: current().typed, locked: 100000000000n, poown: current().typed + '5a'.repeat(32) + 'e8030000' + '00'.repeat(64) }, { recipient: null }], { typeName: 'NodeRegistration' }],
+    [258, 'Update node', () => [{ nodePub: '22'.repeat(32), locked: 200000000000n, poown: current().typed + '5a'.repeat(32) + 'e8030000' + '00'.repeat(64) }, { recipient: null }], { typeName: 'NodeRegistrationUpdate' }],
+    [514, 'Remove node', () => [{ nodePub: '22'.repeat(32) }, { recipient: null }], { typeName: 'RemoveNodeRegistration' }],
+    [770, 'Claim node', () => [{ nodePub: '22'.repeat(32), poown: current().typed + '5a'.repeat(32) + 'e8030000' + '00'.repeat(64) }, { recipient: null }], { typeName: 'ClaimNodeRegistration' }],
+    [36, 'Register gateway', () => [{ gatewayKey: '22'.repeat(32), domain: 'gw.example.org', url: 'https://gw.example.org' }, { recipient: null }], { typeName: 'RegisterGateway' }],
+    [38, 'Unregister gateway', () => [{ gatewayKey: '22'.repeat(32) }, { recipient: null }], { typeName: 'UnregisterGateway' }],
+    [46, 'Register archival', () => [{ nodePub: '22'.repeat(32), domain: 'archive.example.org', url: 'https://archive.example.org' }, { recipient: null }], { typeName: 'RegisterArchival' }],
+    [47, 'Unregister archival', () => [{ nodePub: '22'.repeat(32) }, { recipient: null }], { typeName: 'UnregisterArchival' }],
+    [48, 'Register relay', () => [{ relayKey: H, gatewayKey: '22'.repeat(32), domain: 'relay.example.org', url: 'https://relay.example.org' }, { recipient: null }], { typeName: 'RegisterRelay' }],
+    [49, 'Unregister relay', () => [{ relayKey: H }, { recipient: null }], { typeName: 'UnregisterRelay' }],
+    [7, 'Fee vote commit', () => [{ voteHash: H }, { recipient: null }], { typeName: 'FeeVoteCommitment' }],
+    [263, 'Fee vote reveal (two steps)', null, { typeName: 'FeeVoteReveal' }],
+    [51, 'Economics vote (node key only)', () => [{ parameter: 'min_fee', value: 2500000n }, { recipient: null }], { typeName: 'SetConsensusParam' }],
+    [50, 'Transact policy', () => [{ mask: 0b110 }, { recipient: null }], { typeName: 'TransactPolicy' }],
+    [54, 'Split policy', () => [{ recipients: [{ account: R(), shareBp: 2500 }] }, { recipient: null }], { typeName: 'SplitPolicy' }],
+    [24, 'Create game (chess)', () => [{ gameType: 2, stake: 100000000n, opponent: R() }, { recipient: null }], { typeName: 'CreateApp', rows: [['Stake', '1 ZBC']] }],
+    [25, 'Join game #5', () => [{ gameId: 5n }, { recipient: null }], { typeName: 'JoinApp' }, { game: { stake: 100000000, stake_token: 0, type: 1 } }],
+    [26, 'Game move', () => [{ gameId: 5n, move: '04' }, { recipient: null }], { typeName: 'AppMove' }, { game: { type: 1 } }],
+    [27, 'Resign game', () => [{ gameId: 5n }, { recipient: null }], { typeName: 'ResignApp' }],
+    [28, 'Claim timeout', () => [{ gameId: 5n }, { recipient: null }], { typeName: 'ClaimAppTimeout' }],
+    [17, 'Attest event (unknown path)', () => [{ eventId: 'match-2026-09-16', value: 'home' }, { recipient: null }], { typeName: 'AttestEvent' }],
+  ];
+  const typesEl = $('types');
+  for (const [type, label, build, intent, context] of TYPES) {
+    const b = document.createElement('button'); b.textContent = `${type} · ${label}`;
+    b.onclick = () => runType(type, label, build, intent, context);
+    typesEl.append(b);
+  }
+  async function runType(type, label, build, intent, context) {
+    if (!current()) return log('connect first', 'err');
+    if (type === 263 && !build) return feeVoteReveal();
+    const [params, extra = {}] = build();
+    const unsigned = Z.buildTx(type, params, env(extra));
+    const ctx = typeof context === 'function' ? context() : context;
+    return signTx(unsigned, { title: label, ...intent }, ctx);
+  }
+  async function feeVoteReveal() {
+    const pre = { recentBlockHash: H, height: 1000, feeVote: 12000 };
+    const info = Z.bytesToHex(Z.feeVoteInfo(pre));
+    const r = await req('zbc_signDigest', { account: current().typed, kind: 'fee-vote-reveal', preimage: pre, digest: info, chain: chain() });
+    const unsigned = Z.buildTx(263, { blockHash: H, height: 1000, feeVote: 12000n, voterSig: r.signature }, env({ recipient: null }));
+    return signTx(unsigned, { title: 'Reveal fee vote', typeName: 'FeeVoteReveal' }, { feeVoteInfo: info });
+  }
+  $('allTypes').onclick = async () => { for (const t of TYPES) { try { await runType(...t); } catch {} } };
+  $('mismatch').onclick = () => signTx(Z.buildTx(1, { amount: 10000000000n }, env()), { title: 'Claim your free airdrop', typeName: 'SendZBC', rows: [['Amount', '1 ZBC'], ['To', 'ZBC_JS22X5VN_PH57LK54_ZL6ME2OY_LTJGKHWU_XCC3LBU7_EQNO34FF_XIU2FBNY']] });
+  $('wrongSender').onclick = () => signTx(Z.buildTx(1, { amount: 1n }, env({ sender: R() })), { typeName: 'SendZBC' });
+  $('truncated').onclick = () => req('zbc_signTransaction', { account: current().typed, unsignedTx: Z.bytesToHex(Z.buildTx(1, { amount: 1n }, env())).slice(0, -2), chain: chain(), intent: {} });
+  $('notHeld').onclick = () => signTx(Z.buildTx(1, { amount: 1n }, env({ sender: R() })), { typeName: 'SendZBC' }, undefined, Z.parseAddress(R()).hex);
+  $('wrongChain').onclick = () => req('zbc_signTransaction', { account: current().typed, unsignedTx: Z.bytesToHex(Z.buildTx(1, { amount: 1n }, env())), chain: { genesis: 'ab'.repeat(32) }, intent: {} });
+  $('unknownType').onclick = () => signTx(Z.buildTx(999, { raw: '010203' }, env({ recipient: null })), { typeName: 'Type999' });
+
+  $('signMessage').onclick = () => req('zbc_signMessage', { account: current().typed, message: $('msg').value, chain: chain() });
+  $('signMessageBad').onclick = () => req('zbc_signMessage', { account: current().typed, message: 'aa'.repeat(32), chain: chain() });
+  for (const b of document.querySelectorAll('[data-digest]')) b.onclick = () => digest(b.dataset.digest);
+  async function digest(kind) {
+    const acc = current(); const g = genesisBytes(); const me = Z.parseTypedHex(acc.typed); const other = Z.parseAddress(R());
+    if (kind === 'group-link' || kind === 'group-control') { const pre = { controller: other.hex, member: acc.typed, validUntil: 812440, seq: kind === 'group-link' ? 0 : 3, genesis: $('genesis').value }; const d = Z.bytesToHex(Z.groupConsentDigest(kind, { controller: other.typed, member: me.typed, validUntil: 812440, seq: pre.seq, genesis: g })); return req('zbc_signDigest', { account: acc.typed, kind, preimage: pre, digest: d, chain: chain() }); }
+    if (kind === 'relay-permit') { const pre = { from: Z.bytesToHex(me.payload), to: Z.bytesToHex(other.payload), exp: Math.floor(Date.now() / 1000) + 90 * 86400 }; return req('zbc_signDigest', { account: acc.typed, kind, preimage: pre, digest: Z.bytesToHex(Z.relayPermitMessage(pre)), chain: chain() }); }
+    if (kind === 'fee-vote-reveal') { const pre = { recentBlockHash: H, height: 1000, feeVote: 12000 }; return req('zbc_signDigest', { account: acc.typed, kind, preimage: pre, digest: Z.bytesToHex(Z.feeVoteInfo(pre)), chain: chain() }); }
+    if (kind === 'escrow-cosign') { const u = Z.buildTx(1, { amount: 500000000n }, { sender: other.hex, recipient: acc.typed, fee: 2550000n, survival: 0n, escrow: { approver: other.hex, commission: 1000n, timeout: Math.floor(Date.now() / 1000) + 86400, instruction: 'deliver first', multiParty: true, requestId: 7n } }); return req('zbc_signDigest', { account: acc.typed, kind, preimage: { unsignedTx: Z.bytesToHex(u) }, digest: Z.bytesToHex(Z.txDigest(u, g, $('tag').value)), chain: chain() }); }
+    if (kind === 'blind') return req('zbc_signDigest', { account: acc.typed, kind: 'opaque', digest: 'ab'.repeat(32), chain: chain() });
+    if (kind === 'wrong') return req('zbc_signDigest', { account: acc.typed, kind: 'group-link', preimage: { controller: other.hex, member: acc.typed, validUntil: 812440, seq: 0 }, digest: 'ab'.repeat(32), chain: chain() });
+  }
+  $('signMultisig').onclick = async () => {
+    const ms = accounts.find((a) => a.multisig && (a.address === $('msaddr').value.trim() || a.typed === $('msaddr').value.trim())) || accounts.find((a) => a.multisig);
+    if (!ms) return log('share a signer-held multisig account first (zbc_requestAccounts)', 'err');
+    const inner = Z.buildEnvelope({ type: 1, version: 1, sender: ms.typed, recipient: R(), fee: 10000000n, body: Z.bodies[1]({ amount: 100000000n }), message: 'from the test dapp' });
+    const r = await req('zbc_signMultisig', { multisig: ms.typed, inner: Z.bytesToHex(inner), chain: chain(), intent: { title: 'Send 1 ZBC from the treasury', typeName: 'SendZBC', rows: [['Amount', '1 ZBC']] } });
+    const sigs = r.signatures.slice().sort((a, b) => a.signer < b.signer ? -1 : 1);
+    const outer = Z.buildTx(5, { info: { min: ms.multisig.min, nonce: BigInt(ms.multisig.nonce), participants: ms.multisig.participants }, inner, sigs: { hash: Z.bytesToHex(Z.sha3_256(inner)), list: sigs.map((s) => ({ signer: s.signer, sig: s.signature })) } }, env({ sender: sigs[0].signer, recipient: null }));
+    await signTx(outer, { title: 'Multisig outer', typeName: 'MultiSignature' }, undefined, sigs[0].signer);
+  };
+  $('msFallback').onclick = async () => {
+    const ms = accounts.find((a) => a.multisig); if (!ms) return log('share a signer-held multisig first', 'err');
+    const inner = Z.buildEnvelope({ type: 1, version: 1, sender: ms.typed, recipient: R(), fee: 10000000n, body: Z.bodies[1]({ amount: 100000000n }) });
+    for (const p of ms.multisig.participants) if (accounts.find((a) => a.typed === p)) await signTx(inner, { title: 'Participant signature', typeName: 'SendZBC' }, { multisig: { role: 'propose', address: ms.typed, min: ms.multisig.min, nonce: ms.multisig.nonce, participants: ms.multisig.participants } }, p);
+  };
+  $('submit').onclick = async () => { if (!confirm('This broadcasts a real transaction. Continue?')) return; const u = Z.buildTx(1, { amount: 100000n }, env()); await req('zbc_submitTransaction', { account: current().typed, unsignedTx: Z.bytesToHex(u), chain: chain(), intent: { title: 'Send 0.001 ZBC', typeName: 'SendZBC', rows: [['Amount', '0.001 ZBC']] }, node: $('node').value || undefined }); };
+})();
+</script>
+</body>
+</html>

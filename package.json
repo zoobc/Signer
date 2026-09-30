@@ -1,0 +1,31 @@
+{
+  "name": "zoobc-signer",
+  "version": "1.0.0",
+  "description": "ZooBC Signer — a Chromium (MV3) extension that holds keys in every ZooBC account format and signs transactions for web pages after decoding them itself.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zoobc/signer.git"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "test": "node --test test/*.test.js",
+    "zip": "node scripts/build.mjs && cd dist && zip -qr ../zoobc-signer.zip . && cd .. && echo zoobc-signer.zip",
+    "dapp": "node scripts/build.mjs && node scripts/serve.mjs",
+    "browser": "node scripts/build.mjs && node test/browser.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0",
+    "@scure/base": "1.2.6",
+    "@scure/bip32": "1.7.0",
+    "@scure/bip39": "1.6.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "playwright": "1.63.0"
+  }
+}
