@@ -15,13 +15,15 @@ const ORIGIN = 'https://shop.example.com';
 
 // ---- chrome stub
 function memStore() { let data = {}; return { async get(keys) { if (!keys) return { ...data }; const ks = Array.isArray(keys) ? keys : [keys]; const o = {}; for (const k of ks) if (k in data) o[k] = structuredClone(data[k]); return o; }, async set(obj) { for (const [k, v] of Object.entries(obj)) data[k] = structuredClone(v); }, async remove(keys) { for (const k of Array.isArray(keys) ? keys : [keys]) delete data[k]; }, async clear() { data = {}; } }; }
-const L = {};
+const L = { injected: [], activeTab: null };
 globalThis.chrome = {
   storage: { session: memStore(), local: memStore() },
   alarms: { create: async () => {}, clear: async () => {}, onAlarm: { addListener() {} } },
-  runtime: { getURL: (p) => 'chrome-extension://abc/' + p, onConnect: { addListener(fn) { L.connect = fn; } }, onMessage: { addListener(fn) { L.message = fn; } }, onStartup: { addListener() {} }, sendMessage: async () => {}, getManifest: () => ({ version: '1.0.0' }) },
+  runtime: { getURL: (p) => 'chrome-extension://abc/' + p, onConnect: { addListener(fn) { L.connect = fn; } }, onMessage: { addListener(fn) { L.message = fn; } }, onStartup: { addListener() {} }, sendMessage: async () => {}, getManifest: () => ({ version: '1.0.0', host_permissions: ['https://zoobc.network/*', 'https://zoobc.net/*'] }) },
   windows: { create: async () => ({ id: 1 }), update: async () => {}, onRemoved: { addListener(fn) { L.removed = fn; } } },
-  permissions: { contains: async () => false, request: async () => true },
+  permissions: { contains: async ({ origins }) => origins.every((o) => ['https://zoobc.network/*', 'https://zoobc.net/*'].includes(o)) },
+  tabs: { query: async () => [L.activeTab] },
+  scripting: { executeScript: async (opts) => { L.injected.push(opts); return [{}]; } },
   notifications: { create() {} },
 };
 globalThis.fetch = async () => { throw new Error('offline'); };
@@ -135,4 +137,27 @@ test('vault, connect, sign, checks, lock/unlock, restart', { timeout: 60000 }, a
   // disconnect
   assert.equal((await request(port2, 'x1', 'zbc_disconnect')).result, true);
   assert.deepEqual((await request(port2, 'x2', 'zbc_accounts')).result, []);
+});
+
+test('activeTab injection and personal-node host rule', { timeout: 20000 }, async () => {
+  await loadWorker();
+  L.injected.length = 0;
+  L.activeTab = { id: 7, url: 'https://shop.example.com/checkout?x=1' };
+  let r = await ok({ type: 'site:inject' });
+  assert.deepEqual(r, { injected: true, origin: 'https://shop.example.com' });
+  assert.equal(L.injected.length, 2);
+  assert.deepEqual(L.injected[0].files, ['content.js']); assert.equal(L.injected[0].world, undefined); assert.equal(L.injected[0].target.tabId, 7);
+  assert.deepEqual(L.injected[1].files, ['inpage.js']); assert.equal(L.injected[1].world, 'MAIN');
+  L.activeTab = { id: 8, url: 'chrome://extensions/' };
+  r = await ok({ type: 'site:inject' });
+  assert.equal(r.injected, false); assert.equal(L.injected.length, 2);
+  await assert.rejects(ok({ type: 'site:inject' }, true), /not allowed/);
+
+  await ok({ type: 'vault:reset' });
+  await ok({ type: 'vault:create', password: 'correct horse battery' });
+  const s = await ok({ type: 'settings:set', settings: { nodes: { testnet: 'https://zoobc.net/' } } });
+  assert.equal(s.nodes.testnet, 'https://zoobc.net');
+  await assert.rejects(ok({ type: 'settings:set', settings: { nodes: { mainnet: 'https://evil.example.com' } } }), /zoobc\.network, https:\/\/zoobc\.net/);
+  await assert.rejects(ok({ type: 'permissions:request', node: 'https://evil.example.com' }), /Personal nodes/);
+  assert.equal(await ok({ type: 'permissions:request', node: 'https://zoobc.network' }), true);
 });

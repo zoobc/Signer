@@ -2,12 +2,24 @@
 // Drives the built extension in real Chromium: vault → seed → dapp connect → sign flows, with screenshots.
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, cpSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
-const EXT = new URL('../dist/', import.meta.url).pathname;
+const DIST = new URL('../dist/', import.meta.url).pathname;
 const SHOTS = new URL('../screenshots/', import.meta.url).pathname;
 mkdirSync(SHOTS, { recursive: true });
+// The shipped manifest uses activeTab: window.zoobc reaches a page only after the user clicks the toolbar
+// icon on it, a gesture Playwright cannot perform. The test loads a copy of dist/ whose static content
+// scripts also match the local test dapp, so the relay and provider are exercised exactly as shipped.
+const EXT = SHOTS + '/../.profile-ext-' + Date.now() + '/';
+cpSync(DIST, EXT, { recursive: true });
+{
+  const m = JSON.parse(readFileSync(EXT + 'manifest.json', 'utf8'));
+  const DAPP = 'http://localhost:8787/*';
+  m.host_permissions = [...new Set([...(m.host_permissions || []), DAPP])];
+  for (const cs of m.content_scripts) cs.matches = [...new Set([...cs.matches, DAPP])];
+  writeFileSync(EXT + 'manifest.json', JSON.stringify(m, null, 2));
+}
 const server = spawn('node', [new URL('../scripts/serve.mjs', import.meta.url).pathname], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -150,7 +162,7 @@ try {
   const ap2 = await approval(() => ap.click('.actions button.primary'));
   check('second prompt is the type-5 outer', /Propose a multisig/.test(await ap2.locator('.title').textContent()));
   await mark(); await ap2.click('.actions button.primary'); logText = await lastLog(/local verify/);
-  check('outer signed and verified', /signature verifies/.test(logText));
+  check('outer signed and verified', /signature verifies/.test(logText), /signature verifies/.test(logText) ? '' : logText.slice(0, 600));
 
   // group-link consent (hold to sign)
   ap = await approval(() => dapp.click('button[data-digest="group-link"]'));
@@ -202,6 +214,6 @@ try {
   const local = await popup.evaluate(() => chrome.storage.local.get(null));
   check('no secret in chrome.storage.local', !JSON.stringify(local).includes('abandon'));
 } catch (e) { console.error('ERROR', e); results.push({ name: 'script', ok: false, detail: e.message }); }
-finally { await ctx.close(); server.kill(); }
+finally { await ctx.close(); server.kill(); rmSync(EXT, { recursive: true, force: true }); }
 console.log(`\n${results.filter((r) => r.ok).length}/${results.length} checks passed`);
 process.exit(results.every((r) => r.ok) ? 0 : 1);

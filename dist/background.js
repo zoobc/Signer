@@ -10486,6 +10486,7 @@ function nodeFor(id) {
   const custom = vault && vault.settings.nodes && vault.settings.nodes[id];
   return normalizeNodeUrl(custom) || NETWORKS[id] && NETWORKS[id].node || null;
 }
+var HOST_LIST = (chrome.runtime.getManifest().host_permissions || []).map((m) => m.replace(/\/\*$/, "")).join(", ");
 async function hostPermitted(url) {
   try {
     const u = new URL(url);
@@ -10768,6 +10769,24 @@ async function enrichContext(p, chain2, ctx) {
   await Promise.all(tasks);
   return out;
 }
+async function injectIntoActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+  if (!tab || !tab.id) return { injected: false, reason: "No active tab" };
+  let origin = null;
+  try {
+    const u = new URL(tab.url || "");
+    if (u.protocol === "https:" || u.protocol === "http:") origin = u.origin;
+  } catch {
+  }
+  if (!origin) return { injected: false, reason: "Not a web page" };
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"], injectImmediately: true });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["inpage.js"], world: "MAIN", injectImmediately: true });
+    return { injected: true, origin };
+  } catch (e) {
+    return { injected: false, origin, reason: e && e.message || "Injection failed" };
+  }
+}
 async function openApproval() {
   const s = await SESSION.get(["approvalWindow", "lastOpen"]);
   const t = Date.now();
@@ -10968,7 +10987,8 @@ function grant(origin, hexes2) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!sender || !sender.url || !sender.url.startsWith(chrome.runtime.getURL(""))) return false;
   const fromApprove = sender.url.startsWith(APPROVE_URL);
-  handleUi(msg, { fromApprove, url: sender.url }).then((r) => sendResponse({ ok: true, result: r })).catch((e) => sendResponse({ ok: false, error: asRpcError(e).toJSON() }));
+  const fromPopup = sender.url.startsWith(POPUP_URL);
+  handleUi(msg, { fromApprove, fromPopup, url: sender.url }).then((r) => sendResponse({ ok: true, result: r })).catch((e) => sendResponse({ ok: false, error: asRpcError(e).toJSON() }));
   return true;
 });
 async function handleUi(msg, who) {
@@ -11271,14 +11291,13 @@ async function handleUi(msg, who) {
     case "settings:set": {
       requireUnlocked(unlocked);
       const prev = vault.settings.network;
-      vault.settings = { ...vault.settings, ...sanitizeSettings(msg.settings || {}) };
+      const next = sanitizeSettings(msg.settings || {});
+      if (next.nodes) {
+        for (const n of Object.values(next.nodes)) if (!await hostPermitted(n)) throw new Error(`Personal nodes must be on one of the signer's hosts: ${HOST_LIST}`);
+      }
+      vault.settings = { ...vault.settings, ...next };
       await saveVault();
       await touch();
-      if (msg.settings && msg.settings.nodes) for (const u of Object.values(msg.settings.nodes)) {
-        const n = normalizeNodeUrl(u);
-        if (n) await chrome.permissions.request({ origins: [`${new URL(n).origin}/*`] }).catch(() => {
-        });
-      }
       if (prev !== vault.settings.network) {
         const c = await genesisCache();
         const g = c[vault.settings.network];
@@ -11324,7 +11343,12 @@ async function handleUi(msg, who) {
     case "permissions:request": {
       const n = normalizeNodeUrl(msg.node);
       if (!n) throw new Error("https URL required");
-      return chrome.permissions.request({ origins: [`${new URL(n).origin}/*`] });
+      if (!await hostPermitted(n)) throw new Error(`Personal nodes must be on one of the signer's hosts: ${HOST_LIST}`);
+      return true;
+    }
+    case "site:inject": {
+      if (!who.fromPopup) throw new Error("not allowed");
+      return injectIntoActiveTab();
     }
     default:
       throw new Error("unknown message " + type);

@@ -271,7 +271,23 @@ var FORMATS = [
   { format: "XRP", name: "Ripple", hint: "r\u2026" }
 ];
 var LANGS = { en: "English", zh: "\u4E2D\u6587", ru: "\u0420\u0443\u0441\u0441\u043A\u0438\u0439", it: "Italiano", es: "Espa\xF1ol", fr: "Fran\xE7ais", ja: "\u65E5\u672C\u8A9E", ko: "\uD55C\uAD6D\uC5B4" };
-var state = { tab: isOptions ? "settings" : "accounts", status: null, data: null, balances: {} };
+var state = { tab: isOptions ? "settings" : "accounts", status: null, data: null, balances: {}, site: null };
+async function injectProvider() {
+  if (isOptions) return;
+  try {
+    state.site = await send({ type: "site:inject" });
+  } catch (e) {
+    state.site = { injected: false, reason: e.message };
+  }
+  const bar = document.getElementById("siteBar");
+  if (bar) bar.replaceWith(siteBar());
+}
+function siteBar() {
+  const s = state.site;
+  if (!s || !s.origin) return el("div", { id: "siteBar" });
+  const host = s.origin.replace(/^https?:\/\//, "");
+  return el("div", { id: "siteBar", class: "tiny muted", style: "padding:6px 14px 0", text: s.injected ? `Signer available to ${host} until it navigates` : `Signer not available to ${host}: ${s.reason || "injection failed"}` });
+}
 async function refresh() {
   try {
     state.status = await send({ type: "status" });
@@ -316,7 +332,7 @@ function frame(main, tab) {
   );
   const pendingBar = s.pending ? el("div", { class: "card flex", style: "margin:10px 14px 0;cursor:pointer", onclick: () => send({ type: "pending:open" }) }, el("span", { class: "grow", text: `${s.pending} request${s.pending === 1 ? "" : "s"} waiting` }), el("span", { class: "link", text: "Review \u25B8" })) : null;
   const tabs = el("div", { class: "tabs" }, ...["accounts", "sites", "activity", "settings"].map((t) => el("button", { class: t === tab ? "on" : "", text: t[0].toUpperCase() + t.slice(1), onclick: () => showTab(t) })));
-  return el("div", { id: "app" }, head, pendingBar, el("div", { id: "main" }, main), tabs);
+  return el("div", { id: "app" }, head, siteBar(), pendingBar, el("div", { id: "main" }, main), tabs);
 }
 async function showTab(tab) {
   state.tab = tab;
@@ -861,18 +877,10 @@ async function settingsScreen() {
     row("Auto-lock after (minutes)", autolock),
     row("Default network", net),
     row("Language", lang),
-    el("div", { class: "section", text: "Personal nodes (https, asked for permission)" }),
+    el("div", { class: "section", text: "Personal nodes (https, on zoobc.network or zoobc.net)" }),
     el("label", { class: "field", text: "TestNet node URL" }, nodeT),
     el("label", { class: "field", text: "MainNet node URL" }, nodeM),
-    el("button", { class: "ghost", style: "width:100%;margin-top:8px", text: "Save node URLs", onclick: async () => {
-      for (const u of [nodeT.value, nodeM.value]) if (u.trim()) {
-        try {
-          await send({ type: "permissions:request", node: u.trim() });
-        } catch {
-        }
-      }
-      save({ nodes: { testnet: nodeT.value.trim(), mainnet: nodeM.value.trim() } });
-    } }),
+    el("button", { class: "ghost", style: "width:100%;margin-top:8px", text: "Save node URLs", onclick: () => save({ nodes: { testnet: nodeT.value.trim(), mainnet: nodeM.value.trim() } }) }),
     el("div", { class: "section", text: "Advanced" }),
     toggle("sessionKeys", "Session keys for game moves", "Types 26\u201328 for one game and one site, up to 2 hours, with a notification per auto-signed move. Never for anything that moves value."),
     toggle("blindDigest", "Allow blind digest signing", "Lets a page ask for a signature over a bare 32-byte digest with no preimage. A full-screen red warning is shown each time."),
@@ -968,3 +976,4 @@ function exportScreen() {
   ));
 }
 refresh();
+injectProvider();
