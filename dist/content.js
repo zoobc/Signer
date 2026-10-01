@@ -1,6 +1,8 @@
 (() => {
   // src/content.js
   (() => {
+    if (globalThis.__zoobcSignerRelay) return;
+    globalThis.__zoobcSignerRelay = true;
     const CHANNEL = "zoobc-signer";
     const outstanding = /* @__PURE__ */ new Set();
     let port = null;

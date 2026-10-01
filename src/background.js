@@ -128,6 +128,8 @@ function log(entry) { vault.log.unshift({ at: now(), ...entry }); if (vault.log.
 async function genesisCache() { const { genesisCache: g } = await LOCAL.get('genesisCache'); return g || {}; }
 async function rememberGenesis(id, info, nodeUrl) { const g = await genesisCache(); g[id] = { genesis: info.genesis, tag: info.tag, node: nodeUrl, height: info.height, at: now() }; await LOCAL.set({ genesisCache: g }); }
 function nodeFor(id) { const custom = vault && vault.settings.nodes && vault.settings.nodes[id]; return node.normalizeNodeUrl(custom) || (NETWORKS[id] && NETWORKS[id].node) || null; }
+/** Hosts the manifest grants (host_permissions); personal nodes are limited to these so the worker never fetches elsewhere. */
+const HOST_LIST = (chrome.runtime.getManifest().host_permissions || []).map((m) => m.replace(/\/\*$/, '')).join(', ');
 async function hostPermitted(url) { try { const u = new URL(url); if (u.protocol !== 'https:') return false; return await chrome.permissions.contains({ origins: [`${u.origin}/*`] }); } catch { return false; } }
 
 /** Resolve the chain a request names. Returns { id, label, genesis, genesisBytes, tag, node, height, avgBlockSeconds, unverified }. */
@@ -328,6 +330,26 @@ async function enrichContext(p, chain, ctx) {
 }
 
 // ---------------------------------------------------------------- approval window (§1, §13)
+// ---------------------------------------------------------------- provider injection (activeTab)
+/**
+ * Puts window.zoobc into the tab the user is looking at. The manifest asks for activeTab instead of
+ * broad host permissions, so the provider reaches a page only after the user clicks the toolbar icon
+ * on it (the two declared hosts get it from the static content scripts). The grant ends when the tab
+ * navigates; the user clicks the icon again. Returns { injected, origin } or { injected: false, reason }.
+ */
+async function injectIntoActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+  if (!tab || !tab.id) return { injected: false, reason: 'No active tab' };
+  let origin = null;
+  try { const u = new URL(tab.url || ''); if (u.protocol === 'https:' || u.protocol === 'http:') origin = u.origin; } catch {}
+  if (!origin) return { injected: false, reason: 'Not a web page' };
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'], injectImmediately: true });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['inpage.js'], world: 'MAIN', injectImmediately: true });
+    return { injected: true, origin };
+  } catch (e) { return { injected: false, origin, reason: (e && e.message) || 'Injection failed' }; }
+}
+
 async function openApproval() {
   const s = await SESSION.get(['approvalWindow', 'lastOpen']);
   const t = Date.now();
@@ -494,7 +516,8 @@ function grant(origin, hexes) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!sender || !sender.url || !sender.url.startsWith(chrome.runtime.getURL(''))) return false;
   const fromApprove = sender.url.startsWith(APPROVE_URL);
-  handleUi(msg, { fromApprove, url: sender.url }).then((r) => sendResponse({ ok: true, result: r })).catch((e) => sendResponse({ ok: false, error: asRpcError(e).toJSON() }));
+  const fromPopup = sender.url.startsWith(POPUP_URL);
+  handleUi(msg, { fromApprove, fromPopup, url: sender.url }).then((r) => sendResponse({ ok: true, result: r })).catch((e) => sendResponse({ ok: false, error: asRpcError(e).toJSON() }));
   return true;
 });
 
@@ -635,8 +658,9 @@ async function handleUi(msg, who) {
     case 'log:list': requireUnlocked(unlocked); return vault.log.slice(0, Number(msg.limit) || 100).map((l) => ({ ...l, accountLabel: l.account ? labelFor(l.account) : null }));
     case 'settings:set': {
       requireUnlocked(unlocked); const prev = vault.settings.network;
-      vault.settings = { ...vault.settings, ...sanitizeSettings(msg.settings || {}) }; await saveVault(); await touch();
-      if (msg.settings && msg.settings.nodes) for (const u of Object.values(msg.settings.nodes)) { const n = node.normalizeNodeUrl(u); if (n) await chrome.permissions.request({ origins: [`${new URL(n).origin}/*`] }).catch(() => {}); }
+      const next = sanitizeSettings(msg.settings || {});
+      if (next.nodes) for (const n of Object.values(next.nodes)) if (!(await hostPermitted(n))) throw new Error(`Personal nodes must be on one of the signer's hosts: ${HOST_LIST}`);
+      vault.settings = { ...vault.settings, ...next }; await saveVault(); await touch();
       if (prev !== vault.settings.network) { const c = await genesisCache(); const g = c[vault.settings.network]; for (const [, p] of ports) safePost(p.port, { kind: 'event', event: 'chainChanged', data: { genesis: g ? g.genesis : null, id: vault.settings.network } }); }
       return vault.settings;
     }
@@ -656,7 +680,8 @@ async function handleUi(msg, who) {
     }
     case 'approve:decide': { if (!who.fromApprove) throw new Error('Only the approval window can sign'); return decide(String(msg.id), !!msg.approved, msg.options || {}, msg.reason || ''); }
     case 'approve:rejectOrigin': { if (!who.fromApprove) throw new Error('not allowed'); const pending = await pendingMap(); for (const p of Object.values(pending)) if (p.origin === msg.origin) await decide(p.id, false, {}, 'all from this site'); return true; }
-    case 'permissions:request': { const n = node.normalizeNodeUrl(msg.node); if (!n) throw new Error('https URL required'); return chrome.permissions.request({ origins: [`${new URL(n).origin}/*`] }); }
+    case 'permissions:request': { const n = node.normalizeNodeUrl(msg.node); if (!n) throw new Error('https URL required'); if (!(await hostPermitted(n))) throw new Error(`Personal nodes must be on one of the signer's hosts: ${HOST_LIST}`); return true; }
+    case 'site:inject': { if (!who.fromPopup) throw new Error('not allowed'); return injectIntoActiveTab(); }
     default: throw new Error('unknown message ' + type);
   }
 }

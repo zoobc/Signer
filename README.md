@@ -11,7 +11,7 @@ and the prompt shows what the bytes do — not what the page claims.
 
 ```
 src/
-  manifest.json        MV3 manifest (storage, alarms, notifications; two gateway hosts)
+  manifest.json        MV3 manifest (storage, alarms, notifications, activeTab, scripting; two gateway hosts)
   background.js        service worker: vault, permissions, request queue, chain check, signing
   content.js           relay page ↔ worker; stamps the origin itself
   inpage.js            window.zoobc provider (MAIN world, no secrets)
@@ -56,6 +56,27 @@ chrome://extensions → Developer mode → Load unpacked → pick `dist/`. A bui
 so a fresh clone loads without running npm; rebuild after changing anything under `src/`.
 The toolbar popup creates the vault (password ≥ 10 characters), then *Add seed* / *Import key* /
 *Add multisig*.
+
+## Permissions and how a page gets `window.zoobc`
+
+The manifest asks for `activeTab` instead of broad host permissions, so the extension installs
+without a "read and change all your data on all websites" warning and the Web Store does not
+flag it for broad host access. The consequence is a click: on any site other than the two declared
+hosts (`https://zoobc.network`, `https://zoobc.net`, which get the provider from the static content
+scripts) the page sees `window.zoobc` only after the user clicks the ZooBC Signer toolbar icon while
+on that page. Opening the popup is the user gesture; the popup asks the service worker to inject
+`content.js` (isolated world) and `inpage.js` (MAIN world) into the active tab with
+`chrome.scripting.executeScript`, and shows "Signer available to *host*" under the header. The grant
+ends when the tab navigates or reloads, so the icon must be clicked again on the new page.
+
+Pages should therefore not assume the provider exists at load time: check `window.zoobc` and also
+listen for the `zoobc#initialized` event, which `inpage.js` dispatches the moment it is injected
+(the test page does exactly this). If the extension is pinned to the toolbar the click is one
+gesture; otherwise it sits behind the puzzle-piece menu.
+
+Personal node URLs in Settings are limited to the hosts the manifest grants (`zoobc.network`,
+`zoobc.net`); the worker refuses to fetch from anywhere else, and a page cannot name another node
+in `zbc_submitTransaction`.
 
 ## Test page
 

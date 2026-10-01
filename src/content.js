@@ -1,5 +1,9 @@
 // Relay between the page (inpage.js) and the service worker. The origin is stamped here, never by the page.
+// Runs as a static content script on the declared hosts and is injected with chrome.scripting (activeTab)
+// everywhere else, so it may be delivered twice to one page: the second copy exits here.
 (() => {
+  if (globalThis.__zoobcSignerRelay) return;
+  globalThis.__zoobcSignerRelay = true;
   const CHANNEL = 'zoobc-signer';
   const outstanding = new Set();
   let port = null;
